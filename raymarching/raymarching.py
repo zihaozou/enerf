@@ -9,7 +9,10 @@ from torch.cuda.amp import custom_bwd, custom_fwd
 try:
     import _raymarching as _backend
 except ImportError:
-    from .backend import _backend
+    try:
+        from . import _raymarching as _backend
+    except ImportError:
+        from .backend import _backend
 
 
 # ----------------------------------------

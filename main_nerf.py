@@ -2,7 +2,7 @@ from re import A
 import torch
 import configargparse
 
-from nerf.provider import NeRFDataset, EventNeRFDataset
+from nerf.provider import NeRFDataset, EventNeRFDataset, MyEventNeRFDataset, MyImageNeRFDataset
 from nerf.gui import NeRFGUI
 from nerf.utils import *
 
@@ -181,6 +181,7 @@ if __name__ == '__main__':
     parser.add_argument('--error_map', action='store_true', help="use error map to sample rays")
     parser.add_argument('--clip_text', type=str, default='', help="text input for CLIP guidance")
     parser.add_argument('--rand_pose', type=int, default=-1, help="<0 uses no rand pose, =0 only uses rand pose, >0 sample one rand pose every $ known poses")
+    parser.add_argument('--basket_size', type=int, default=1, help="basket size for event_basket")
 
     opt = parser.parse_args()
     assert_config(opt)
@@ -222,8 +223,10 @@ if __name__ == '__main__':
             gui.render()
         else:
             if opt.events:
-                train_loader = EventNeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
-                valid_loader = NeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                # train_loader = EventNeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                train_loader = MyEventNeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                # valid_loader = NeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                valid_loader = MyImageNeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
             else:
                 train_loader = NeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
                 valid_loader = NeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()

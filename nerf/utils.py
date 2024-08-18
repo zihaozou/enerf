@@ -480,8 +480,7 @@ class Trainer(object):
 
     ### ------------------------------	
     def train_step_events(self, data):
-        images = data["images"] # [B, N, 3]
-        B, N, C = images.shape
+        B = data["rays_evs_o1"].shape[0] # [B, N, 3]
         loss_evs, loss_no_evs, loss_frames = -1,-1,-1  # init for logging
 
         bg_color_evs = torch.rand((B, 1, self.out_dim_color)).to(self.device) # (B, Nevs, 3)
@@ -528,22 +527,6 @@ class Trainer(object):
             loss_evs = w_evLoss * torch.mean((delta_linlog_normed - sum_pol_normed)**2)
         
         loss = loss_evs
-        if not self.event_only:
-            rays_o = data['rays_o'] # [B, N, 3]
-            rays_d = data['rays_d'] # [B, N, 3]
-
-            # train with random background color if using alpha mixing
-            if C == 4:
-                bg_color = torch.rand_like(images[..., :self.out_dim_color]) # [B, N, 3], pixel-wise random.
-                gt_rgb = images[..., :self.out_dim_color] * images[..., self.out_dim_color:] + bg_color * (1 - images[..., self.out_dim_color:])
-            else:
-                bg_color = None
-                gt_rgb = images
-
-            outputs = self.model.render(rays_o, rays_d, staged=False, bg_color=bg_color, perturb=True, **vars(self.opt))
-            pred_rgb = outputs['image']
-            loss_frames = self.criterion(pred_rgb, gt_rgb).mean()
-            loss = loss + self.weight_loss_rgb * loss_frames
 
         if self.negative_event_sampling and self.epoch > self.epoch_start_noEvLoss:
             bg_color_evs = torch.rand((B, 1, self.out_dim_color)).to(self.device) # (B, Nnoevs, 3)
@@ -740,7 +723,7 @@ class Trainer(object):
             self.model.mark_untrained_grid(train_loader._data.poses, train_loader._data.intrinsics)
 
         # get a ref to error_map
-        self.error_map = train_loader._data.error_map
+        # self.error_map = train_loader._data.error_map
         
         dt_eps = 0
         dt_logeps = 0
@@ -996,11 +979,11 @@ class Trainer(object):
                     # self.log(f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f})")
                 pbar.update(loader.batch_size)
 
-                if self.epoch <= self.eval_interval:
-                    save_path_gt = os.path.join(self.workspace, "validation", "gt_trainViews", f'{self.local_step-1:04d}_gt.png')
-                    if not os.path.isdir(os.path.dirname(save_path_gt)):
-                        os.makedirs(os.path.dirname(save_path_gt), exist_ok=True)
-                    cv2.imwrite(save_path_gt, cv2.cvtColor((loader._data.images[self.local_step-1].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+                # if self.epoch <= self.eval_interval:
+                #     save_path_gt = os.path.join(self.workspace, "validation", "gt_trainViews", f'{self.local_step-1:04d}_gt.png')
+                #     if not os.path.isdir(os.path.dirname(save_path_gt)):
+                #         os.makedirs(os.path.dirname(save_path_gt), exist_ok=True)
+                #     cv2.imwrite(save_path_gt, cv2.cvtColor((loader._data.images[self.local_step-1].detach().cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
         
         if self.ema is not None:
             self.ema.update()

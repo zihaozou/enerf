@@ -48,8 +48,9 @@ def visualize_poses(poses, size=0.1, bound=4):
         segs = np.array([[pos, a], [pos, b], [pos, c], [pos, d], [a, b], [b, c], [c, d], [d, a], [pos, o]])
         segs = trimesh.load_path(segs)
         objects.append(segs)
-
-    trimesh.Scene(objects).show()
+    png = trimesh.Scene(objects).save_image(resolution=(1920, 1080), visible=False)
+    with open('scene_image.png', 'wb') as f:
+        f.write(png)
 
 def plot_poses(ps_in, path=None, l=0.1, title=""):
     assert ps_in.shape[0] > 0

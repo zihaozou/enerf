@@ -10,7 +10,10 @@ import atexit
 try:
     import _ffmlp as _backend
 except ImportError:
-    from .backend import _backend
+    try:
+        from . import _ffmlp as _backend
+    except ImportError:
+        from .backend import _backend
 
 class _ffmlp_forward(Function):
 

@@ -12,3 +12,7 @@ volsdf/
 **volsdf*
 tensorf/
 **tensorf*
+DATA/
+OUTPUT/
+.vscode/
+test.ipynb

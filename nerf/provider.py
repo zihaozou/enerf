@@ -6,6 +6,7 @@ import tqdm
 import numpy as np
 import shutil
 from scipy.spatial.transform import Slerp, Rotation
+import pandas as pd
 
 import h5py
 import torch
@@ -15,6 +16,7 @@ from .utils import get_rays, get_event_rays
 from utils.pose_utils import *
 from utils.plot_utils import *
 from utils.event_utils import *
+from natsort import natsorted
 
 # NeRF dataset
 import json
@@ -991,8 +993,8 @@ class NGPDataset(Dataset):
         print(f'[INFO] average radius before scaling with {self.scale} = {np.linalg.norm(ps[:, :3, 3], axis=-1).mean()}')
 
         for i, f in enumerate(frames):
-            f_path = os.path.join(self.root_path, f['file_path'])
-
+            # f_path = os.path.join(self.root_path, f['file_path'])
+            f_path = f['file_path']
             # there are non-exist paths in fox...
             if not os.path.exists(f_path):
                 continue
@@ -1150,18 +1152,24 @@ class EventNeRFDataset(NGPDataset):
 
             events_in = evs_batches_ns_tmp.pop(0)
             events_in = events_in.astype(np.float32)
-            events_in = np.asarray(sorted(events_in, key=lambda x: x[2]))   
+            # events_in = np.asarray(sorted(events_in, key=lambda x: x[2]))
+            time_stamps_sorted_idx = np.argsort(events_in[:, 2])
+            events_in = events_in[time_stamps_sorted_idx]
 
             # create evs_dict_xy with key: (x,y) and value: ev-tuple (x, y, z, t_ns, pol)
-            evs_dict_xy = {}
-            for ev in events_in:
-                key_xy = (ev[0], ev[1])
-                if key_xy in evs_dict_xy.keys():
-                    evs_dict_xy[key_xy].append(ev.tolist())
-                else:
-                    evs_dict_xy[key_xy] = [ev.tolist()]
+            # evs_dict_xy = {}
+            # for ev in events_in:
+            #     key_xy = (ev[0], ev[1])
+            #     if key_xy in evs_dict_xy.keys():
+            #         evs_dict_xy[key_xy].append(ev.tolist())
+            #     else:
+            #         evs_dict_xy[key_xy] = [ev.tolist()]
+            events_in_df: pd.DataFrame = pd.DataFrame(events_in, columns=["x", "y", "t", "pol"])
+            events_in_gb = events_in_df.groupby(["x", "y"]).agg(list).reset_index()
+            events_in_gb = events_in_gb[events_in_gb['t'].apply(lambda x: len(x) > 1)]
+            evs_dict_xy = dict(zip(events_in_gb[["x", "y"]].apply(tuple, axis=1), events_in_gb[["t", "pol"]].apply(lambda x: list(zip(*x)), axis=1)))
             # filter dictonary s.t. > 1 ev per pixel
-            evs_dict_xy = dict((k, v) for k, v in evs_dict_xy.items() if len(v) > 1) 
+            # evs_dict_xy = dict((k, v) for k, v in evs_dict_xy.items() if len(v) > 1) 
             del events_in
             
             # compute pair of (numEvs, Index) for each pixel (where there is >1 event)
@@ -1187,14 +1195,12 @@ class EventNeRFDataset(NGPDataset):
                 self.num_successor_evs[current_frame] = num_successor_evs
             
             # flatten evs_dict_xy to linear self.events np.array (N, 5) 
-            for xy in list(evs_dict_xy.keys()):
-                evs = evs_dict_xy[xy]
+            for xy, evs in evs_dict_xy.items():
                 for ev in evs:
                     if current_frame in self.events:
-                        self.events[current_frame].append(ev)
+                        self.events[current_frame].append(tuple([*xy, *ev]))
                     else:
-                        self.events[current_frame] = [ev]
-                del evs_dict_xy[xy]  # delete each key, to keep max-memory low
+                        self.events[current_frame] = [tuple([*xy, *ev])]
 
             evs_dict_xy.clear()
             del evs_dict_xy
@@ -1505,3 +1511,280 @@ class EventNeRFDataset(NGPDataset):
         loader = DataLoader(list(range(size)), batch_size=1, collate_fn=self.collate, shuffle=self.training, num_workers=0) 
         loader._data = self # an ugly fix... we need to access error_map & poses in trainer.
         return loader
+    
+class MyEventNeRFDataset(Dataset):
+    def __init__(self, opt, device, type='train', downscale=1, n_test=10, select_frames=None):
+        super().__init__()
+        self.opt = opt
+        self.device = device
+        self.type = type # train, val, test
+        self.downscale = downscale
+        self.basket_size = opt.basket_size
+        self.root_path = opt.datadir
+        self.mode = opt.mode # esim, tumvie, eds
+        self.preload = opt.preload # preload data into GPU
+        self.scale = opt.scale # camera radius scale to make sure camera are inside the bounding box.
+        self.bound = opt.bound # bounding box half length, also used as the radius to random sample poses.
+        self.fp16 = opt.fp16 # if preload, load into fp16.
+        self.use_events = opt.events
+        self.event_only = opt.event_only
+        self.e2vid = opt.e2vid
+        self.negative_event_sampling = opt.negative_event_sampling
+        self.pp_poses_sphere = opt.pp_poses_sphere
+        self.out_dim_color = opt.out_dim_color 
+        self.rand_pose = opt.rand_pose
+        self.hotpixs = opt.hotpixs
+        self.acc_max_num_evs = opt.acc_max_num_evs
+        self.precompute_evs_poses = opt.precompute_evs_poses
+        self.poses_hf = None
+        self.code_dir = os.path.split(os.path.dirname(os.path.realpath(__file__)))[0]
+        self.imgdir = None
+        self.batch_size_evs = opt.batch_size_evs
+        self.training = self.type in ['train', 'all'] # what is 'trainval' in current main? is it to load all data for training, i.e. cheating?
+        self.num_rays = self.opt.num_rays if self.training else -1
+
+        conffile = os.path.basename(opt.config)
+        p, upfolder = os.path.split(os.path.dirname(opt.config))
+        upupfolder = os.path.split(p)[1]
+        expname = os.path.join(opt.expweek, opt.expname, upupfolder, upfolder+"_"+conffile[:-4])
+        self.workspace = os.path.join(opt.outdir, expname)
+        print(f"Dataloader uses {self.workspace} as workspace, too.")
+
+        if select_frames is not None:
+            if type == 'train':
+                idxs = select_frames["train_idxs"]
+            elif type == 'val':
+                idxs = select_frames["val_idxs"]
+            elif type == 'all':
+                idxs = select_frames["train_idxs"] + select_frames["val_idxs"]
+            else: 
+                idxs = select_frames["train_idxs"] + select_frames["val_idxs"]
+            self.frame_idxs = np.asarray(idxs)
+        self.process_id = str(os.getpid())
+        self.slurm_id = str(os.environ.get("SLURM_JOBID"))
+        self.transform_filepath = os.path.join(self.workspace, 'transform_' + self.slurm_id + "_" + self.process_id + "_" + self.type + ".json") if self.mode != "colmap" else os.path.join(opt.datadir, "transforms.json")
+
+        with open(os.path.join(self.root_path, 'pose', 'camera.json'), 'r') as f:
+            camera_info = json.load(f)
+
+        self.fl = camera_info['fl']
+        self.H = camera_info['res_y']
+        self.W = camera_info['res_x']
+        self.intrinsics = torch.tensor([self.fl, self.fl, self.W/2, self.H/2], dtype=torch.float32)
+
+        all_pose_paths = natsorted(glob.glob(os.path.join(self.root_path, 'pose', 'c2w_*.npy')))
+        all_poses = np.stack([np.load(p) for p in all_pose_paths], axis=0).astype(np.float32)[2:]
+        # make 3x4 to 4x4
+        all_poses = np.concatenate([all_poses, np.tile(np.array([[0, 0, 0, 1]]), (all_poses.shape[0], 1, 1))], axis=1)
+        print(f'[INFO] average radius before scaling with {self.scale} = {np.linalg.norm(all_poses[:, :3, 3], axis=-1).mean()}')
+        all_poses = preprocess_poseArr_sphere(all_poses)
+        
+
+        all_poses = np.stack([nerf_matrix_to_ngp(p[:3], self.scale)[:3] for p in all_poses])
+        print(f'[INFO] average radius after scaling with {self.scale} = {np.linalg.norm(all_poses[:, :3, 3], axis=-1).mean()}')
+        all_poses = torch.from_numpy(all_poses)
+
+        all_events = np.flip(np.load(os.path.join(self.root_path, 'event', 'event_buffer.npy')).transpose(2, 0, 1), axis=1)
+        all_events = all_events.astype(np.float32)
+        all_events = torch.from_numpy(all_events)
+
+        basket_poses = torch.split(all_poses, self.basket_size, dim=0)
+        basket_events = torch.split(all_events, self.basket_size, dim=0)
+        if basket_poses[-1].shape[0] < self.basket_size:
+            basket_poses = basket_poses[:-1]
+            basket_events = basket_events[:-1]
+
+        self.data = []
+        for i in range(len(basket_poses)):
+            if i in self.frame_idxs:
+                ps = basket_poses[i] # (B, 3, 4)
+                evs: torch.Tensor = basket_events[i] # (B, H, W)
+
+                has_events = torch.tensor(list(zip(*evs[1:].nonzero(as_tuple=True))))
+                if len(has_events) == 0:
+                    continue
+
+                self.data.append({
+                    'poses': ps.to(device) if self.preload else ps,
+                    'events': evs.to(device) if self.preload else evs,
+                    'has_events': has_events,}
+                )
+        if self.preload:
+            self.intrinsics = self.intrinsics.to(device)
+
+    def collate(self, index):
+        B = len(index)
+
+        data = self.data[index[0]]
+
+        chosen_idx = np.random.choice(len(data['has_events']), self.batch_size_evs, self.batch_size_evs > len(data['has_events']))
+
+        chosen_coords = data['has_events'][chosen_idx] # (M, 3)
+
+        chosen_coords[:, 0] +=1
+
+        xs = chosen_coords[:, 2].to(self.device).unsqueeze(0)
+        ys = chosen_coords[:, 1].to(self.device).unsqueeze(0)
+        pols = data['events'][chosen_coords[:, 0], chosen_coords[:, 1], chosen_coords[:, 2]].unsqueeze(0)
+
+        ts = chosen_coords[:, 0]
+        poses1 = data['poses'][ts-1].unsqueeze(0)
+        poses2 = data['poses'][ts].unsqueeze(0)
+
+        rays_evs = get_event_rays(xs, ys, poses1, poses2, self.intrinsics) # (B, Nevs, 3)
+        print(type(rays_evs))
+
+        return {
+            "H": self.H,
+            "W": self.W,
+            "rays_evs_o1": rays_evs["rays_evs_o1"],
+            "rays_evs_d1": rays_evs["rays_evs_d1"],
+            "rays_evs_o2": rays_evs["rays_evs_o2"],
+            "rays_evs_d2": rays_evs["rays_evs_d2"],
+            "pols": pols,
+        }
+        
+    def dataloader(self):
+        size = len(self.data)
+        if self.training and self.rand_pose > 0:
+            size += size // self.rand_pose # index >= size means we use random pose.
+        loader = DataLoader(list(range(size)), batch_size=1, collate_fn=self.collate, shuffle=self.training, num_workers=0) 
+        loader._data = self # an ugly fix... we need to access error_map & poses in trainer.
+        return loader
+        
+class MyImageNeRFDataset(Dataset):
+    def __init__(self, opt, device, type='train', downscale=1, n_test=10, select_frames=None):
+        super().__init__()
+        self.opt = opt
+        self.device = device
+        self.type = type # train, val, test
+        self.downscale = downscale
+        self.basket_size = opt.basket_size
+        self.root_path = opt.datadir
+        self.mode = opt.mode # esim, tumvie, eds
+        self.preload = opt.preload # preload data into GPU
+        self.scale = opt.scale # camera radius scale to make sure camera are inside the bounding box.
+        self.bound = opt.bound # bounding box half length, also used as the radius to random sample poses.
+        self.fp16 = opt.fp16 # if preload, load into fp16.
+        self.use_events = opt.events
+        self.event_only = opt.event_only
+        self.e2vid = opt.e2vid
+        self.negative_event_sampling = opt.negative_event_sampling
+        self.pp_poses_sphere = opt.pp_poses_sphere
+        self.out_dim_color = opt.out_dim_color 
+        self.rand_pose = opt.rand_pose
+        self.hotpixs = opt.hotpixs
+        self.acc_max_num_evs = opt.acc_max_num_evs
+        self.precompute_evs_poses = opt.precompute_evs_poses
+        self.poses_hf = None
+        self.code_dir = os.path.split(os.path.dirname(os.path.realpath(__file__)))[0]
+        self.imgdir = None
+        self.batch_size_evs = opt.batch_size_evs
+        self.training = self.type in ['train', 'all'] # what is 'trainval' in current main? is it to load all data for training, i.e. cheating?
+        self.num_rays = self.opt.num_rays if self.training else -1
+
+        conffile = os.path.basename(opt.config)
+        p, upfolder = os.path.split(os.path.dirname(opt.config))
+        upupfolder = os.path.split(p)[1]
+        expname = os.path.join(opt.expweek, opt.expname, upupfolder, upfolder+"_"+conffile[:-4])
+        self.workspace = os.path.join(opt.outdir, expname)
+        print(f"Dataloader uses {self.workspace} as workspace, too.")
+
+        if select_frames is not None:
+            if type == 'train':
+                idxs = select_frames["train_idxs"]
+            elif type == 'val':
+                idxs = select_frames["val_idxs"]
+            elif type == 'all':
+                idxs = select_frames["train_idxs"] + select_frames["val_idxs"]
+            else: 
+                idxs = select_frames["train_idxs"] + select_frames["val_idxs"]
+            self.frame_idxs = np.asarray(idxs)
+        self.process_id = str(os.getpid())
+        self.slurm_id = str(os.environ.get("SLURM_JOBID"))
+        self.transform_filepath = os.path.join(self.workspace, 'transform_' + self.slurm_id + "_" + self.process_id + "_" + self.type + ".json") if self.mode != "colmap" else os.path.join(opt.datadir, "transforms.json")
+
+        with open(os.path.join(self.root_path, 'pose', 'camera.json'), 'r') as f:
+            camera_info = json.load(f)
+
+        self.fl = camera_info['fl']
+        self.H = camera_info['res_y']
+        self.W = camera_info['res_x']
+        self.intrinsics = torch.tensor([self.fl, self.fl, self.W/2, self.H/2], dtype=torch.float32)
+
+        all_pose_paths = natsorted(glob.glob(os.path.join(self.root_path, 'pose', 'c2w_*.npy')))
+        all_poses = np.stack([np.load(p) for p in all_pose_paths], axis=0).astype(np.float32)[2:]
+        # make 3x4 to 4x4
+        all_poses = np.concatenate([all_poses, np.tile(np.array([[0, 0, 0, 1]]), (all_poses.shape[0], 1, 1))], axis=1)
+        print(f'[INFO] average radius before scaling with {self.scale} = {np.linalg.norm(all_poses[:, :3, 3], axis=-1).mean()}')
+        all_poses = preprocess_poseArr_sphere(all_poses)
+        
+
+        all_poses = np.stack([nerf_matrix_to_ngp(p[:3], self.scale)[:3] for p in all_poses])
+        print(f'[INFO] average radius after scaling with {self.scale} = {np.linalg.norm(all_poses[:, :3, 3], axis=-1).mean()}')
+        all_poses = torch.from_numpy(all_poses)
+
+        all_image_paths = natsorted(glob.glob(os.path.join(self.root_path, 'color', '*.png')))
+        all_images = np.stack([cv2.cvtColor(cv2.imread(p), cv2.COLOR_BGR2RGB) for p in all_image_paths], axis=0).astype(np.float32) / 255.
+        all_images = torch.from_numpy(all_images[2:]).mean(dim=-1, keepdim=True)
+
+        self.poses = all_poses[self.frame_idxs]
+        self.images = all_images[self.frame_idxs]
+
+    def collate(self, index):
+        B = len(index)
+
+        poses = self.poses[index].to(self.device) # [B, 4, 4]
+        images = self.images[index]
+
+        rays = get_rays(poses, self.intrinsics, self.H, self.W, self.num_rays)
+
+        results = {
+            'H': self.H,
+            'W': self.W,
+            'rays_o': rays['rays_o'],
+            'rays_d': rays['rays_d'],
+        }
+
+        if self.images is not None:
+            images = self.images[index].to(self.device) # [B, H, W, 3/4]
+            if self.training:
+                C = images.shape[-1]
+                images = torch.gather(images.view(B, -1, C), 1, torch.stack(C * [rays['inds']], -1)) # [B, N, 3/4]
+            results['images'] = images
+
+        return results
+    
+    def dataloader(self):
+        size = len(self.poses)
+        if self.training and self.rand_pose > 0:
+            size += size // self.rand_pose # index >= size means we use random pose.
+        loader = DataLoader(list(range(size)), batch_size=1, collate_fn=self.collate, shuffle=self.training, num_workers=0) 
+        loader._data = self # an ugly fix... we need to access error_map & poses in trainer.
+        return loader
+
+
+
+
+
+
+
+        
+
+
+        
+
+
+
+
+        
+
+        
+
+        
+
+
+
+
+        
+
