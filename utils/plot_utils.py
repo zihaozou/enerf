@@ -219,7 +219,7 @@ def plot_coord_sys_c2w(
             plt.title(title)
     else:
         plt.legend()
-    return ax
+    plt.savefig("poses.png")
 
 
 def visualize_rays_frames(rays_d, poses, img_i, target_disp, start_frame, end_frame):

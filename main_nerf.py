@@ -223,10 +223,10 @@ if __name__ == '__main__':
             gui.render()
         else:
             if opt.events:
-                # train_loader = EventNeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
-                train_loader = MyEventNeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
-                # valid_loader = NeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
-                valid_loader = MyImageNeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                train_loader = EventNeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                # train_loader = MyEventNeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                valid_loader = NeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
+                # valid_loader = MyImageNeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
             else:
                 train_loader = NeRFDataset(opt, device=device, type='train', downscale=opt.downscale, select_frames=select_frames).dataloader()
                 valid_loader = NeRFDataset(opt, device=device, type='val', downscale=opt.downscale, select_frames=select_frames).dataloader()
@@ -234,8 +234,8 @@ if __name__ == '__main__':
             print(f"max expochs = {max_epoch}")
             trainer.train(train_loader, valid_loader, max_epoch)
 
-            # also test
-            test_loader = NeRFDataset(opt, device=device, type='test', select_frames=select_frames).dataloader()       
-            trainer.test(test_loader) # colmap doesn't have gt, so just test.
+            # # also test
+            # test_loader = NeRFDataset(opt, device=device, type='test', select_frames=select_frames).dataloader()       
+            # trainer.test(test_loader) # colmap doesn't have gt, so just test.
     
-            trainer.save_mesh(resolution=256, threshold=10)
+            # trainer.save_mesh(resolution=256, threshold=10)

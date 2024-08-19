@@ -368,10 +368,10 @@ def preprocess_poseArr_sphere(poses):
     # ps = poses[:, :3, :] * 20
     # plot_poses(poses[::200, :3, :], l=0.5, title="before flip")
 
-    poses[:, 0:3, 1] *= -1 # flip the y and z axis
-    poses[:, 0:3, 2] *= -1 # now poses are in rub (confirmed by plotting)
-    poses = poses[:, [1, 0, 2, 3], :] # swap y and z 
-    poses[:, 2, :] *= -1 # flip whole world upside down  
+    # poses[:, 0:3, 1] *= -1 # flip the y and z axis
+    # poses[:, 0:3, 2] *= -1 # now poses are in rub (confirmed by plotting)
+    # poses = poses[:, [1, 0, 2, 3], :] # swap y and z 
+    # poses[:, 2, :] *= -1 # flip whole world upside down  
 
     up = poses[:, 0:3, 1].sum(0) 
     up = up / np.linalg.norm(up)
@@ -1576,11 +1576,30 @@ class MyEventNeRFDataset(Dataset):
         all_poses = np.stack([np.load(p) for p in all_pose_paths], axis=0).astype(np.float32)[2:]
         # make 3x4 to 4x4
         all_poses = np.concatenate([all_poses, np.tile(np.array([[0, 0, 0, 1]]), (all_poses.shape[0], 1, 1))], axis=1)
+        F_xy = np.array([
+            [-1, 0, 0, 0],
+            [0, -1, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
+        all_poses = F_xy @ all_poses
         print(f'[INFO] average radius before scaling with {self.scale} = {np.linalg.norm(all_poses[:, :3, 3], axis=-1).mean()}')
-        all_poses = preprocess_poseArr_sphere(all_poses)
-        
 
+        
+        all_poses = preprocess_poseArr_sphere(all_poses)
+        # theta = np.pi / 3  # 90 degrees in radians
+        # R_z = np.array([
+        #     [np.cos(theta), -np.sin(theta), 0, 0],
+        #     [np.sin(theta), np.cos(theta), 0, 0],
+        #     [0, 0, 1, 0],
+        #     [0, 0, 0, 1]
+        # ])
+        # all_poses = R_z @ all_poses
+        
+        
         all_poses = np.stack([nerf_matrix_to_ngp(p[:3], self.scale)[:3] for p in all_poses])
+        plot_coord_sys_c2w(all_poses[:, :3, :], plot_every_nth_pose=200)
+
         print(f'[INFO] average radius after scaling with {self.scale} = {np.linalg.norm(all_poses[:, :3, 3], axis=-1).mean()}')
         all_poses = torch.from_numpy(all_poses)
 
@@ -1722,6 +1741,7 @@ class MyImageNeRFDataset(Dataset):
 
         all_poses = np.stack([nerf_matrix_to_ngp(p[:3], self.scale)[:3] for p in all_poses])
         print(f'[INFO] average radius after scaling with {self.scale} = {np.linalg.norm(all_poses[:, :3, 3], axis=-1).mean()}')
+        plot_poses(all_poses[::5, :3, :], l=0.5, title="final")
         all_poses = torch.from_numpy(all_poses)
 
         all_image_paths = natsorted(glob.glob(os.path.join(self.root_path, 'color', '*.png')))

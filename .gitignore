@@ -16,3 +16,5 @@ DATA/
 OUTPUT/
 .vscode/
 test.ipynb
+OUTDIR/
+*.png

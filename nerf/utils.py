@@ -433,7 +433,7 @@ class Trainer(object):
             f.write(f"{code_dir}") 
             f.close()
         
-        debug = False
+        debug = True
         if sys.gettrace() is not None:
             debug = True
 
