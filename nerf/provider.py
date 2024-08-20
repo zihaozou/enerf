@@ -1564,13 +1564,16 @@ class MyEventNeRFDataset(Dataset):
         self.slurm_id = str(os.environ.get("SLURM_JOBID"))
         self.transform_filepath = os.path.join(self.workspace, 'transform_' + self.slurm_id + "_" + self.process_id + "_" + self.type + ".json") if self.mode != "colmap" else os.path.join(opt.datadir, "transforms.json")
 
-        with open(os.path.join(self.root_path, 'pose', 'camera.json'), 'r') as f:
+        with open(os.path.join(self.root_path, 'pose', 'Camera_intrinsics.json'), 'r') as f:
             camera_info = json.load(f)
 
-        self.fl = camera_info['fl']
-        self.H = camera_info['res_y']
-        self.W = camera_info['res_x']
-        self.intrinsics = torch.tensor([self.fl, self.fl, self.W/2, self.H/2], dtype=torch.float32)
+        self.fl_x = camera_info['fl_x']
+        self.fl_y = camera_info['fl_y']
+        self.H = int(camera_info['h'])
+        self.W = int(camera_info['w'])
+        self.cx = camera_info['cx']
+        self.cy = camera_info['cy']
+        self.intrinsics = torch.tensor([self.fl_x, self.fl_y, self.cx, self.cy], dtype=torch.float32)
 
         all_pose_paths = natsorted(glob.glob(os.path.join(self.root_path, 'pose', 'c2w_*.npy')))
         all_poses = np.stack([np.load(p) for p in all_pose_paths], axis=0).astype(np.float32)[2:]
@@ -1723,13 +1726,16 @@ class MyImageNeRFDataset(Dataset):
         self.slurm_id = str(os.environ.get("SLURM_JOBID"))
         self.transform_filepath = os.path.join(self.workspace, 'transform_' + self.slurm_id + "_" + self.process_id + "_" + self.type + ".json") if self.mode != "colmap" else os.path.join(opt.datadir, "transforms.json")
 
-        with open(os.path.join(self.root_path, 'pose', 'camera.json'), 'r') as f:
+        with open(os.path.join(self.root_path, 'pose', 'Camera_intrinsics.json'), 'r') as f:
             camera_info = json.load(f)
 
-        self.fl = camera_info['fl']
-        self.H = camera_info['res_y']
-        self.W = camera_info['res_x']
-        self.intrinsics = torch.tensor([self.fl, self.fl, self.W/2, self.H/2], dtype=torch.float32)
+        self.fl_x = camera_info['fl_x']
+        self.fl_y = camera_info['fl_y']
+        self.H = int(camera_info['h'])
+        self.W = int(camera_info['w'])
+        self.cx = camera_info['cx']
+        self.cy = camera_info['cy']
+        self.intrinsics = torch.tensor([self.fl_x, self.fl_y, self.cx, self.cy], dtype=torch.float32)
 
         all_pose_paths = natsorted(glob.glob(os.path.join(self.root_path, 'pose', 'c2w_*.npy')))
         all_poses = np.stack([np.load(p) for p in all_pose_paths], axis=0).astype(np.float32)[2:]
